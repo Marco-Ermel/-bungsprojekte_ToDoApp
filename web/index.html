@@ -3,78 +3,279 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Übungsprojekt – Eingabe in DB</title>
+  <title>ToDoApp – Docker Projekt</title>
   <link rel="stylesheet" href="assets/style.css" />
 </head>
 <body>
-  <header>
-    <h1>Übungsprojekt</h1>
-    <p>Nginx + Express + PostgreSQL (persistente DB)</p>
+  <div class="bg"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">✓</div>
+      <div>
+        <h1>ToDoApp</h1>
+        <p>Nginx + Express + PostgreSQL (Docker Compose) – ToDos werden in der DB gespeichert.</p>
+      </div>
+    </div>
+
+    <div class="right">
+      <button class="ghost" id="refreshBtn" title="Neu laden">↻ Refresh</button>
+      <button class="ghost" id="clearDoneBtn" title="Erledigte (lokal) entfernen">🧹 Clear done</button>
+    </div>
   </header>
 
-  <main class="card">
-    <h2>Neuen Eintrag speichern</h2>
+  <main class="container">
+    <section class="card hero">
+      <div class="hero-left">
+        <h2>Deine Aufgaben – sauber organisiert</h2>
+        <p class="muted">
+          Tipp: Der <b>Erledigt-Status</b> wird bei dir im Browser gespeichert (LocalStorage),
+          die ToDos selbst liegen persistent in PostgreSQL.
+        </p>
 
-    <form id="msgForm">
-      <input id="name" placeholder="Dein Name" required />
-      <input id="message" placeholder="Deine Nachricht" required />
-      <button type="submit">Speichern</button>
-    </form>
+        <form id="todoForm" class="todo-form">
+          <input id="todoText" placeholder="Neues ToDo… (z.B. Docker Abgabe fertig machen)" required maxlength="120" />
+          <button type="submit" class="primary">Hinzufügen</button>
+        </form>
 
-    <p id="status"></p>
+        <div class="toolbar">
+          <div class="chips">
+            <button class="chip active" data-filter="all">Alle</button>
+            <button class="chip" data-filter="open">Offen</button>
+            <button class="chip" data-filter="done">Erledigt</button>
+          </div>
 
-    <h2>Letzte Einträge</h2>
-    <div id="list"></div>
+          <div class="search">
+            <input id="searchInput" placeholder="Suchen…" />
+          </div>
+        </div>
+
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-num" id="countAll">0</div>
+            <div class="stat-label">Total</div>
+          </div>
+          <div class="stat">
+            <div class="stat-num" id="countOpen">0</div>
+            <div class="stat-label">Offen</div>
+          </div>
+          <div class="stat">
+            <div class="stat-num" id="countDone">0</div>
+            <div class="stat-label">Erledigt</div>
+          </div>
+        </div>
+
+        <p id="status" class="status muted"></p>
+      </div>
+
+      <div class="hero-right">
+        <div class="glass">
+          <div class="glass-title">API Status</div>
+          <div class="glass-row">
+            <span class="dot" id="apiDot"></span>
+            <span id="apiText">prüfe…</span>
+          </div>
+          <div class="glass-hint muted">Endpoint: <code>/api/messages</code></div>
+        </div>
+
+        <div class="glass">
+          <div class="glass-title">Quick Commands</div>
+          <pre><code>docker compose -f pfad/docker-compose/docker-compose.yml up -d --build
+docker ps
+docker logs uebungsprojekt_app --tail 30</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="card list-card">
+      <div class="list-head">
+        <h3>ToDo Liste</h3>
+        <span class="pill" id="shownCount">0 angezeigt</span>
+      </div>
+
+      <div id="list" class="list"></div>
+
+      <div class="empty" id="emptyState" style="display:none;">
+        <div class="empty-icon">✨</div>
+        <div>
+          <b>Keine ToDos gefunden</b>
+          <div class="muted">Erstelle ein neues ToDo oder ändere Filter/Suche.</div>
+        </div>
+      </div>
+    </section>
   </main>
 
+  <footer class="footer muted">
+    Marco Ermel · ToDoApp Docker Projekt · Persistente DB (Volume) · UI: modern
+  </footer>
+
   <script>
-    const form = document.getElementById("msgForm");
+    // --- Local done-state persisted in browser ---
+    const DONE_KEY = "todo_done_ids_v1";
+    const getDoneSet = () => new Set(JSON.parse(localStorage.getItem(DONE_KEY) || "[]"));
+    const saveDoneSet = (set) => localStorage.setItem(DONE_KEY, JSON.stringify([...set]));
+
+    const form = document.getElementById("todoForm");
     const statusEl = document.getElementById("status");
     const listEl = document.getElementById("list");
+    const emptyEl = document.getElementById("emptyState");
 
-    async function loadMessages() {
-      const res = await fetch("/api/messages");
-      const data = await res.json();
+    const countAllEl = document.getElementById("countAll");
+    const countOpenEl = document.getElementById("countOpen");
+    const countDoneEl = document.getElementById("countDone");
+    const shownCountEl = document.getElementById("shownCount");
 
-      listEl.innerHTML = data.map(x => `
-        <div class="row">
-          <b>#${x.id}</b> ${escapeHtml(x.name)}: ${escapeHtml(x.message)}
-          <small>(${new Date(x.created_at).toLocaleString()})</small>
-        </div>
-      `).join("");
+    const searchInput = document.getElementById("searchInput");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const clearDoneBtn = document.getElementById("clearDoneBtn");
+
+    const apiDot = document.getElementById("apiDot");
+    const apiText = document.getElementById("apiText");
+
+    let todos = []; // rows from API
+    let filter = "all";
+    let query = "";
+
+    function esc(s){
+      return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
     }
 
+    async function checkApi(){
+      try{
+        const res = await fetch("/api/health");
+        if(!res.ok) throw new Error("bad");
+        apiDot.classList.add("ok");
+        apiText.textContent = "online";
+      }catch(e){
+        apiDot.classList.remove("ok");
+        apiText.textContent = "offline (API nicht erreichbar)";
+      }
+    }
+
+    async function loadTodos(){
+      statusEl.textContent = "Lade ToDos…";
+      const res = await fetch("/api/messages");
+      const data = await res.json();
+      todos = Array.isArray(data) ? data : [];
+      statusEl.textContent = "";
+      render();
+    }
+
+    function render(){
+      const doneSet = getDoneSet();
+
+      const normalizedQuery = query.trim().toLowerCase();
+      let view = todos.map(t => ({
+        ...t,
+        done: doneSet.has(String(t.id))
+      }));
+
+      if(normalizedQuery){
+        view = view.filter(t => (t.message || "").toLowerCase().includes(normalizedQuery));
+      }
+
+      if(filter === "open") view = view.filter(t => !t.done);
+      if(filter === "done") view = view.filter(t => t.done);
+
+      // Stats (based on all todos)
+      const all = todos.length;
+      const done = todos.filter(t => doneSet.has(String(t.id))).length;
+      const open = all - done;
+
+      countAllEl.textContent = all;
+      countDoneEl.textContent = done;
+      countOpenEl.textContent = open;
+
+      shownCountEl.textContent = `${view.length} angezeigt`;
+
+      if(view.length === 0){
+        listEl.innerHTML = "";
+        emptyEl.style.display = "flex";
+        return;
+      }else{
+        emptyEl.style.display = "none";
+      }
+
+      listEl.innerHTML = view.map(t => `
+        <div class="todo">
+          <label class="todo-left">
+            <input type="checkbox" ${t.done ? "checked" : ""} data-id="${t.id}">
+            <div>
+              <div class="todo-text ${t.done ? "done" : ""}">${esc(t.message)}</div>
+              <div class="todo-meta muted">#${t.id} · ${new Date(t.created_at).toLocaleString()}</div>
+            </div>
+          </label>
+        </div>
+      `).join("");
+
+      // checkbox handlers
+      listEl.querySelectorAll("input[type=checkbox]").forEach(cb => {
+        cb.addEventListener("change", () => {
+          const id = String(cb.getAttribute("data-id"));
+          const set = getDoneSet();
+          if(cb.checked) set.add(id);
+          else set.delete(id);
+          saveDoneSet(set);
+          render();
+        });
+      });
+    }
+
+    // Create new ToDo -> saved in DB using existing backend
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      statusEl.textContent = "Speichere...";
+      const text = document.getElementById("todoText").value.trim();
+      if(!text) return;
 
-      const payload = {
-        name: document.getElementById("name").value,
-        message: document.getElementById("message").value
-      };
+      statusEl.textContent = "Speichere…";
+      const payload = { name: "todo", message: text };
 
       const res = await fetch("/api/messages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {"Content-Type":"application/json"},
         body: JSON.stringify(payload)
       });
 
       const out = await res.json();
-      if (!res.ok) {
+      if(!res.ok){
         statusEl.textContent = "Fehler: " + (out.error || "unbekannt");
         return;
       }
 
-      statusEl.textContent = "Gespeichert! ✅";
+      statusEl.textContent = "Gespeichert ✅";
       form.reset();
-      await loadMessages();
+      await loadTodos();
+      setTimeout(() => statusEl.textContent = "", 1200);
     });
 
-    function escapeHtml(s) {
-      return String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-    }
+    // filter chips
+    document.querySelectorAll(".chip").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".chip").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        filter = btn.getAttribute("data-filter");
+        render();
+      });
+    });
 
-    loadMessages();
+    searchInput.addEventListener("input", () => {
+      query = searchInput.value;
+      render();
+    });
+
+    refreshBtn.addEventListener("click", async () => {
+      await checkApi();
+      await loadTodos();
+    });
+
+    clearDoneBtn.addEventListener("click", () => {
+      localStorage.removeItem(DONE_KEY);
+      render();
+    });
+
+    // init
+    checkApi();
+    loadTodos();
   </script>
 </body>
 </html>
