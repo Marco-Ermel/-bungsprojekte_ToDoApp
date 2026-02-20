@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Übungsprojekt – Eingabe in DB</title>
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Übungsprojekt</h1>
+    <p>Nginx + Express + PostgreSQL (persistente DB)</p>
+  </header>
+
+  <main class="card">
+    <h2>Neuen Eintrag speichern</h2>
+
+    <form id="msgForm">
+      <input id="name" placeholder="Dein Name" required />
+      <input id="message" placeholder="Deine Nachricht" required />
+      <button type="submit">Speichern</button>
+    </form>
+
+    <p id="status"></p>
+
+    <h2>Letzte Einträge</h2>
+    <div id="list"></div>
+  </main>
+
+  <script>
+    const form = document.getElementById("msgForm");
+    const statusEl = document.getElementById("status");
+    const listEl = document.getElementById("list");
+
+    async function loadMessages() {
+      const res = await fetch("/api/messages");
+      const data = await res.json();
+
+      listEl.innerHTML = data.map(x => `
+        <div class="row">
+          <b>#${x.id}</b> ${escapeHtml(x.name)}: ${escapeHtml(x.message)}
+          <small>(${new Date(x.created_at).toLocaleString()})</small>
+        </div>
+      `).join("");
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      statusEl.textContent = "Speichere...";
+
+      const payload = {
+        name: document.getElementById("name").value,
+        message: document.getElementById("message").value
+      };
+
+      const res = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      const out = await res.json();
+      if (!res.ok) {
+        statusEl.textContent = "Fehler: " + (out.error || "unbekannt");
+        return;
+      }
+
+      statusEl.textContent = "Gespeichert! ✅";
+      form.reset();
+      await loadMessages();
+    });
+
+    function escapeHtml(s) {
+      return String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    }
+
+    loadMessages();
+  </script>
+</body>
+</html>
