@@ -17,20 +17,25 @@ services:
       dockerfile: app/Dockerfile
     container_name: uebungsprojekt_app
     environment:
-      DATABASE_URL: postgres://appuser:apppass@db:5432/appdb
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: m347db
+      DB_USER: m347user
+      DB_PASS: m347pass
     depends_on:
       - db
     restart: unless-stopped
 
   db:
-    image: postgres:16-alpine
+    image: mariadb:11
     container_name: uebungsprojekt_db
     environment:
-      POSTGRES_USER: appuser
-      POSTGRES_PASSWORD: apppass
-      POSTGRES_DB: appdb
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: m347db
+      MYSQL_USER: m347user
+      MYSQL_PASSWORD: m347pass
     volumes:
-      - dbdata:/var/lib/postgresql/data
+      - dbdata:/var/lib/mysql
       - ../../db/init:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
 
